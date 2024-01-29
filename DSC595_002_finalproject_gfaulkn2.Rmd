@@ -1,0 +1,438 @@
+---
+title: "Data Munging: GRLS and Tick-Borne Disease"
+author: "Grace Faulkner"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    code_folding: show
+    toc: yes
+    toc_depth: 2
+    toc_float: yes
+editor_options: 
+  markdown: 
+    wrap: 100
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(ggplot2) ##plots/charts
+library(tidyr) ##tidy data 
+library(dplyr) ##data frame objects 
+library(stringr) ##string operations
+library(janitor) ##clean data and explore table functions/relationships
+library(skimr) ##summary statistics
+library(Hmisc) ##data analysis 
+library(ggpubr) ##data visualization
+library(expss) ##tables, labels
+library(kableExtra) ##tables 
+```
+## Golden Retriever Lifetime Study 
+
+The **Golden Retriever Lifetime Study (GRLS)** from the Morris Animal Foundation is a prospective, observational cohort study focused on identifying risk factors for canine cancer and other canine diseases. This unique cohort is comprised of over 3,000 golden retrievers from across the US that are followed throughout their lifetime in attempts to identify genetic, dietary and environmental exposures. The dogs in this cohort were enrolled within their first 2 years of age and every year, their owners and veterinarians have submitted surveys about their lifestyle and health. Using the Morris Animal Foundation GRLS data commons, I have accessed these data with an interest in **canine tick-borne disease (TBD)**.
+
+
+## Cohort Summary 
+The GRLS survey data are stored in the Morris Animal Foundation data repository known as the data commons. The data commons contains information on dog demographics, activity and lifestyle, behavior, medication, and conditions such as infectious disease, gastrointestinal, and ear, nose and throat. From the data commons, I downloaded and explored relevant datasets that could describe TBD diagnoses and TBD-preventative medications. 
+
+After exploring the data commons, I downloaded the dog demographics dataset to determine the size and characteristics of the cohort. This dataset had information on birth date, enrollment date, and reproductive status. Since there was no variable related to cohort status or end date, I have assumed all dogs listed in this dataset to be active.  
+
+This cohort is comprised of 3,044 dogs, with 50.5% being male. More of the dogs were fixed (spayed or neutered) than intact. The average (mean) age of the cohort is 10.5 years. The average (mean) time contributed to the study is 9.2 years. The earliest enrollment date is September 2012 and the last enrollment date is July 2015. I calculated the age and year in study by splitting the birth_date and enrollment_date into month and year and subtracting from the current year (2023). 
+
+```{r, echo=FALSE}
+##import dog profile data file 
+dog_prof <- read.csv('GRLS_profile.csv',header=TRUE, stringsAsFactors=FALSE)
+
+##how many dogs are in the cohort 
+nrow(dog_prof)
+
+##frequency of variables 
+describe(dog_prof)
+
+##frequency of sexual reproductive status 
+table(dog_prof$sex_status) %>% as.data.frame() %>% rename(ReproductiveStatus = Var1) %>% kbl() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+
+ggplot(data=dog_prof, aes(x=sex_status)) + geom_bar(color='slateblue', fill='slateblue') + ggtitle("GRLS Frequency Reproductive Status") + xlab("Reproductive Status") + ylab("Count")
+
+##calculate age of dogs in study 
+    ##split birth_date in month and year column
+    dog_prof[c('Year', 'Month')] <-str_split_fixed(dog_prof$birth_date, '-', 2)
+    ##Create new column age (in years) by subtracting birth year from 2023
+    dog_prof <- dog_prof %>% 
+      mutate(age= 2023-as.numeric(Year))
+    ##summarize age of dogs (frequency by age, mean, min and max)
+    summary(dog_prof$age)
+    ##summarize dog age by reproductive status 
+     cross_cases(dog_prof, sex_status, age) 
+     
+##calculate amount of time in study 
+    ##split enrolled_date in month and year column
+    dog_prof[c('Eyear', 'Emonth')] <-str_split_fixed(dog_prof$enrolled_date, '-', 2) 
+    ##Create new column age (in years) by subtracting birth year from 2023
+    dog_prof <- dog_prof %>% 
+      mutate(StudyYears= 2023-as.numeric(Eyear))
+    ##summarize study years of dogs (frequency by mean, min and max)
+    summary(dog_prof$StudyYears) 
+    ##dogs enrolled per year
+    table(dog_prof$Eyear)
+```
+
+## Infectious Disease
+From the Data Commons, I accessed the Conditions_Infectious Disease dataset to see which conditions were reported by veterinarians each year. 
+
+First, I explored the column headers to see which, if any, TBD, were reported. Additionally, I looked to see how the conditions were reported by noting the columns "record_date", "to_date" and "any". 
+
+This dataset is organized by each dog through every survey year up to year 7. Also, depending on the 'to date' variable, the condition could have been diagnosed only in that survey year or at any time during their participation in the cohort (0 - Reported conditions diagnosed only in that study year, 1 - All reported conditions diagnosed from baseline through that study year). In order to describe unique TBD diagnoses, I filtered based on if the condition was diagnosed and only diagnosed in that year the survey was submitted ('to date' variable) and cross-referenced with the 'any' variable to make sure an infectious condition was reported that year (0 - No conditions diagnosed, 1 - At least one condition diagnosed). 
+
+My search strategy was to filter records based on the 'to date' and 'any' variable to select records could have had a reported TBD. In this dataset, every dog in the cohort is represented or had at least 1 reported condition in at least one annual survey. 
+
+
+```{r}
+##Import GRLS Data file 
+GRLS <- read.csv('GRLS_conditions_infectious.csv', header=TRUE, stringsAsFactors=FALSE)
+
+##how many unique subject ids (or dogs) are in this csv file 
+length(unique(GRLS$subject_id))
+
+##Column names of csv file to determine columns of interest as related to tick-borne disease
+names(GRLS)
+
+##determine what the first few lines of csv file look like 
+head(GRLS, n=10)
+
+##determine summary statistics for each columns 
+describe(GRLS)
+
+```
+
+## Tick-Borne Disease 
+After I explored the data contents and structure, I selected for TBD conditions. Like humans, dogs can get TBD from tick bites that are infected with pathogens. From the infectious diseases reported, I will use the following diagnoses related to TBD: **Anaplasmosis**, **Babesiosis**, **Ehrlichiosis**, **Lyme Disease** and **Rocky Mountain Spotted Fever (RMSF)**. 
+
+I created a new dataframe selecting the columns subject_id, year_in_study, record_date, to_date, any, and the TBD conditions (Anaplasmosis, Babesiosis, Ehrlichiosis, Lyme Disease and Rocky Mountain Spotted Fever). The conditions are coded as 0 and 1, indicating disease not reported and disease reported. I summed each TBD column to determine case counts and created a table and graph. This dataset had 48,704 records. Of the TBD reported, **Lyme Disease** had the most reported cases. There were no records of Babesiosis, which could be due to its absence on annual screening tests of TBD. In dogs, the SNAP test will test for Heartworm, Lyme Disease, Anaplasmosis, Ehrlichiosis, and RMSF. 
+
+
+```{r, echo=FALSE}
+##Select columns of interest (subject_id, year_in_study, record_date, to_date, anaplasma, babesia, ehrlichia, lyme_disease, rocky_mountain_spotted_fever, ticks)
+TBD <- GRLS[c(1,3,4,5,6,7,8,13,23,26,29)] %>% filter(to_date ==0 & any == 1)
+##what does the dataframe look like 
+head(TBD, n=5)
+
+##Filter Anaplasma diagnoses (=1) and create new dataframe 
+Ana <- filter(TBD, anaplasma == 1 & to_date ==0 & any == 1)
+##How many anaplasma diagnoses? 
+sum(Ana$anaplasma, na.rm=TRUE) -> AnaS
+AnaS
+
+##Filter Babesia diagnoses (=1) and create new dataframe 
+Bab <- filter(TBD, babesia == 1 & to_date ==0 & any == 1)
+##how many babesia diagnoses (=1) and create new value 
+sum(Bab$babesia, na.rm=TRUE) -> BabS
+BabS
+
+##Filter Ehlrichia diagnoses (=1) and create new dataframe 
+Ehr <- filter(TBD, ehrlichia == 1 & to_date ==0 & any == 1)
+##how many ehrlichia diagnoses (=1) and create new value 
+sum(Ehr$ehrlichia, na.rm=TRUE) -> EhrS
+EhrS
+
+##Filter Lyme Disease diagnoses (=1) and create new dataframe
+Lyme <- filter(TBD, lyme_disease == 1 & to_date ==0 & any == 1)
+##how many lyme_disease diagnoses (=1) and create new value 
+sum(Lyme$lyme_disease, na.rm=TRUE) -> LymeS
+LymeS
+
+##Filter RMSF diagnoses (=1) and create new dataframe
+RMSF <- filter(TBD,  rocky_mountain_spotted_fever== 1 & to_date ==0 & any == 1)
+##how many rocky_mountain spotted fever diagnoses (=1) and create new value 
+sum(TBD$rocky_mountain_spotted_fever, na.rm=TRUE) -> RMSFS
+RMSFS
+
+##create a dataframe (table) of TBD diagnoses
+TickBorneDisease <- c("Anaplasmosis", "Babesia", "Ehrlichia", "Lyme Disease", "RMSF")
+Diagnoses <- c(AnaS, BabS, EhrS, LymeS, RMSFS) 
+PosTBD <- data.frame(TickBorneDisease, Diagnoses)
+##print dataframe (table)
+kbl(PosTBD) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+
+##Create a chart of positive TBD diagnoses 
+ggplot(data=PosTBD, aes(x=TickBorneDisease, y=Diagnoses)) + geom_bar(stat = "identity", color='slateblue', fill='slateblue') + xlab("Tick-Borne Disease") + ylab("Number of Diagnoses") + ggtitle("Tick-Borne Disease Diagnoses in ASPCA Goldren Retreiever Study") + theme_bw() + geom_text(aes(label = Diagnoses), vjust = 0)
+```
+
+## Repeat Positive TBD reports 
+After determining the total number of TBD cases in this cohort, I wanted to see if dogs were only reporting one positive TBD condition once or if they were experiencing repeat positive TBD conditions throughout their time in the study. Dogs can get bit by ticks multiple times and become re-infected. I grouped each TBD by subject_id to see how often TBD was being reported per dog.  
+
+### Lyme Disease 
+In this cohort, 144 different dogs had reported Lyme Disease. Most of these dogs only reported Lyme Disease once, with an observed decreasing trend (min=1, max=5).
+```{r, echo=FALSE}
+##how many different dogs got Lyme disease? 
+length(unique(Lyme$subject_id))
+##group by ID to see how many repeat infections there are by dog in descending order
+# Group by count using dplyr
+agg_Lyme <- Lyme %>% group_by(subject_id) %>% 
+  summarise(total_count=n()) %>% arrange(desc(total_count))
+##what do the repeat infections look like? 
+describe(agg_Lyme)
+```
+
+### Anaplasmosis 
+In this cohort, 81 different dogs had reported Anaplasmosis. Most of these dogs only reported Anaplasmosis once, with an observed decreasing trend (min=1, max=3).
+```{r, echo=FALSE}
+##how many different dogs got Anaplasmosis? 
+length(unique(Ana$subject_id))
+##group by ID to see how many times a dog got Anaplasmosis (descending order)
+# Group by count using dplyr
+agg_Ana <- Ana %>% group_by(subject_id) %>% 
+  summarise(total_count=n()) %>% arrange(desc(total_count))
+##what do the repeat infections look like? 
+describe(agg_Ana)
+```
+
+### Ehrlichia
+In this cohort, 27 different dogs had reported Ehrlichiosis. Most of these dogs only reported Ehrlichiosis once, with an observed decreasing trend (min=1, max=4).
+```{r, echo=FALSE}
+##how many different dogs got Ehrlichiosis? 
+length(unique(Ehr$subject_id))
+##group by ID to see how many times a dog got Ehrlichia (descending order)
+# Group by count using dplyr
+agg_Ehr <- Ehr %>% group_by(subject_id) %>% 
+  summarise(total_count=n()) %>% arrange(desc(total_count))
+##what do the repeat infections look like? 
+describe(agg_Ehr)
+```
+### Rocky Mountain Spotted Fever
+In this cohort, 13 different dogs had reported Rock Mountain Spotted Fever. Most of these dogs only reported RMSF once except for 1 that reported RMSF 3 times. 
+```{r, echo=FALSE}
+##how many different dogs got RMSF? 
+length(unique(RMSF$subject_id))
+##group by ID to see how many times a dog got RMSF (descending order)
+# Group by count using dplyr
+agg_RMSF <- RMSF %>% group_by(subject_id) %>% 
+  summarise(total_count=n()) %>% arrange(desc(total_count))
+##what do the repeat infections look like? 
+describe(agg_RMSF)
+```
+## Year in Study and TBD 
+Dogs can get bit by ticks throughout their lifetime, presenting an opportunity for re-infection. I wanted to describe the relationship between age and TBD diagnosis to see when TBD was being reported in this cohort. I created a table and chart of each reported TBD counts by each year in the study. Due to the different enrollment years (2012-2015), this does not reflect annual or yearly totals of disease incidence. 
+
+**Lyme Disease** was most reported during the **first 3 years (max=year 1** of being in the study. This was most likely reported puppyhood to age 4. After Year 2 in the study, there are decreasing counts of reported Lyme Disease. 
+
+**Anaplasmosis** was most reported during **year 3** with more cases being reported from year 1 to 5. This was most likely reported after puppyhood (from age 2 to 6). 
+
+**Ehrlichiosis** was most reported during **year 4** with more cases being reported from year 3 to 5. This was most likely reported after puppyhood (from age 3 to 6).
+
+**Rocky Mountain Spotted Fever** was most reported during **year 2** but had overall low case counts in all study years. 
+
+Disclaimer: Data is available through study year 7 due to embargo period
+```{r, echo=FALSE}
+
+##At what ages do dogs get lyme disease
+Lyme_age <- ggplot(Lyme , aes(x=year_in_study)) + geom_bar(color='slateblue', fill='slateblue')+ ggtitle("Lyme Disease by Year in Study") + xlab("Year in Study") + theme_classic()
+##Create new dataframe of lyme disease by age 
+lymeXage <- table(Lyme$year_in_study) %>% as.data.frame() %>% rename(Year_in_Study = Var1, LymeDisease = Freq)
+##create lyme disease by age table 
+kbl(lymeXage) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+
+
+##At what age do dogs get Anaplasmosis
+Ana_age <- ggplot(Ana, aes(x=year_in_study)) + geom_bar(color='slateblue', fill='slateblue')+ ggtitle("Anaplasmosis by Year in Study") + xlab("Year in Study") + theme_classic()
+##Create new dataframe of anaplasmosis by age 
+anaXage <- table(Ana$year_in_study) %>% as.data.frame() %>% rename(Year_in_Study = Var1, Anaplasmosis = Freq)
+##create lyme disease by age table 
+kbl(anaXage) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+
+
+##At what age do dogs get Ehrlichiosis 
+EHR_age <- ggplot(Ehr , aes(x=year_in_study)) + geom_bar(color='slateblue', fill='slateblue')+ ggtitle("Ehrlichiosis by Year in Study") + xlab("Year in Study") + theme_classic()
+##Create new dataframe of Ehrlichiosis by age 
+ehrXage <- table(Ehr$year_in_study) %>% as.data.frame() %>% rename(Year_in_Study = Var1, Ehrlichia = Freq)
+##create Ehrlichiosis by age table 
+kbl(ehrXage) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+
+##At what age do dogs get RMSF
+RMSF_age <- ggplot(RMSF, aes(x=year_in_study)) + geom_bar(color='slateblue', fill='slateblue')+ ggtitle("RMSF by Year in Study") + xlab("Year in Study") + theme_classic()
+##Create new dataframe of RMSF by age 
+rmsfXage <- table(RMSF$year_in_study) %>% as.data.frame() %>% rename(Year_in_Study = Var1, RMSF = Freq)
+##create RMSF by age table 
+kbl(rmsfXage) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+
+
+##arrange multiple TBD plots and age to view at once
+ggarrange(plotlist = list(Lyme_age, Ana_age, EHR_age, RMSF_age))
+
+```
+
+## TBD Coinfections 
+Ticks can carry **more than 1 disease** and cause multiple infections. I wanted to describe the relationship between reported TBD coinfections to see if dogs were reporting only 1 TBD or more. I created a new column, **Tscore** to indicate coinfections that summed each row of TBD. Most of the records in this dataset had no reported TBD. Of the records with a reported TBD, most only had 1 reported TBD with a decreasing trend from 1 to 3 TBD infections. 
+
+```{r, echo=FALSE}
+##create a new column of score of TBD 
+TBD2 <- TBD %>% rowwise() %>% mutate(TScore =  anaplasma + babesia + ehrlichia + lyme_disease + rocky_mountain_spotted_fever)
+
+##create a column of any TBD diagnosed 
+TBD2 <- TBD2 %>% mutate(TBD = case_when(
+  anaplasma == "1"|  babesia =="1"| ehrlichia =="1"| lyme_disease =="1"| rocky_mountain_spotted_fever=="1" ~ "Yes", 
+  anaplasma == "0"&  babesia =="0"& ehrlichia =="0"& lyme_disease =="0"& rocky_mountain_spotted_fever=="0" ~ "No"
+  ))
+
+##create table of TBD frequency **does not include coinfection 
+table(TBD2$TBD) %>% as.data.frame() %>% rename(TBD_Diagnosed = Var1) %>% 
+  kbl() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+##create a table of frequency of tick score (multiple positive TBD reported at once)  
+table(TBD2$TScore) %>% as.data.frame() %>% rename(NumberofInfections = Var1) %>%kbl() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+
+```
+
+## TBD and Ticks  
+TBD are transmitted through the bite of an infected tick. I wanted to describe the relationship between reported TBD and observed ticks to see if owners or veterinarians were observing ticks on dogs and reporting subsequent disease in the same survey year. There were **268 records of ticks being observed** but there were few reports of observed ticks and subsequent disease (only 3 records), with Anaplasmosis and RMSF being reported. This could indicate that dog owners and veterinarians are not seeing the vector but still testing for disease and those that do see the vector are able to remove before TBD is transmitted. Since most TBD are transmitted between 24-48 hours after bite and not all ticks are infected with a TBD pathogen, a tick is not indicative of positive TBD condition. 
+
+```{r, echo=FALSE}
+##how many ticks were observed on dogs? 
+sum(TBD$ticks, na.rm=TRUE)
+
+##How many dogs with Lyme disease also had ticks on them? 
+LT<- sum(Lyme$ticks)
+
+##How many dogs with Anaplamsosis also had ticks on them? 
+AT <- sum(Ana$ticks)
+
+##How many dogs with Ehrlichiosis also had ticks on them? 
+ET <- sum(Ehr$ticks)
+
+##How many dogs with RMSF also had ticks on them? 
+RT <- sum(RMSF$ticks)
+
+##create dataframe of TBD and ticks 
+Tick_Borne_Disease <- c("Lyme Disease", "Anaplasmosis", "Ehrlichia", "RMSF")
+Tick_Observed <- c(LT, AT, ET, RT) 
+Ttbd <- data.frame(Tick_Borne_Disease, Tick_Observed)
+##create a table of TBD and ticks
+kbl(Ttbd) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+
+##Plot 
+ggplot(Ttbd, aes(x=Tick_Borne_Disease, y=Tick_Observed)) + geom_bar(stat = "identity", color='slateblue', fill='slateblue') + ggtitle("Tick observed on Dog and TBD Diagnosed in Same Year") + xlab("TBD") +ylab("Count of Tick observed on Dog") + ylim(0,3) 
+
+```
+
+## Medications 
+TBD can be prevented through routine topical and oral administration of tick prevention. I wanted to describe the use of tick-prevention in this cohort and the relationship between prevention and TBD. I downloaded the medications dataset, which had 40,401 records with **751 different medication ingredients** recorded. This dataset also has information on administration method, dose, and frequency. 
+
+First, I created a frequency table and reviewed the top 10 medication ingredients. Then, I did a google search for common active ingredients in tick-prevention in order to filter appropriate records. Tick prevention can contain ingredients such as Afoxolaner,Fluralaner, Fipronil, (S)-Methoprene, Imidacloprid, Permethrin, Pyriproxyfen, Dinotefuran, and Pyriproxyfen and are typically administered in an **oral** or **topical** form. I selected records to create a new data frame (prev) that contained all records with tick-prevention related ingredients. 
+
+In this cohort, **1,711** dogs recorded a tick-preventative during their time in the cohort.There were 4,814 records of prevention and 35,587 records of no prevention. Most tick-prevention was recorded during the early years of study participation, between year 2 and 5 in the study. The max number of tick prevention was recorded at year 3 in the study or when dogs are about 3-4 years old and there is a general upward trend of being on tick prevention until age 5. Most tick-prevention is administered orally, followed by topically. However, there were 2 records that reported IV or IM administration, which is unusual for tick-prevention. I pulled these records to double check the medication ingredient, which was still related to tick-prevention. As these surveys are filled out by study participants' owners, this may have been user error or recall bias. 
+
+Disclaimer: Like the infectious disease date, this data is available through study year 7 due to embargo period
+
+
+```{r, echo=FALSE}
+##load GRLS medications data
+med <- read.csv('GRLS_medications.csv',header=TRUE, stringsAsFactors=FALSE,  na.strings=c("","NA"))
+
+##what does this file look like
+head(med,n=5)
+
+skim(med)
+##max number of characters in medication ingredients 
+max(nchar(med$medication_ingredients))
+
+##how many different medication ingredients?
+length(unique(med$medication_ingredients))
+
+##count of medication ingredients to see what groups could be made for TBD-preventatives and sort by frequency counts 
+table(med$medication_ingredients) %>% 
+        as.data.frame() %>% 
+        arrange(desc(Freq)) %>% head(10) %>% rename(MedicationIngredients = Var1) %>% kbl() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+
+##select records with TBD preventatives
+Prev <- med %>% 
+  dplyr::filter(grepl(x = medication_ingredients, pattern = "Afoxolaner|Fluralaner|Fipronil|Imidacloprid|Permethrin| Pyriproxyfen|Dinotefuran|Pyriproxyfen", ignore.case = FALSE))
+
+##what does the dataframe look like 
+head(Prev, n=10)
+
+##how many dogs in cohort are on a TBD preventatives
+length(unique(Prev$subject_id))
+
+##what are the frequency of TBD medication ingredients?
+table(Prev$medication_ingredients) %>% 
+        as.data.frame() %>% 
+        arrange(desc(Freq)) %>% 
+    rename(MedicationIngredients = Var1) %>% kbl() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+
+##group by year in study and medication ingredient 
+agg_Prev <- Prev %>% group_by(subject_id, medication_ingredients) %>% 
+  summarise(total_count=n()) %>% arrange(desc(subject_id))
+
+# Group by count using dplyr
+agg_Prev2 <- Prev %>% group_by(subject_id, year_in_study, medication_ingredients) %>% 
+  summarise(total_count=n()) %>% arrange(desc(subject_id))
+
+##create prevention column in a new prevention  dataframe
+Prev2 <- med %>% 
+  mutate(prevention = case_when(
+      medication_ingredients == "Afoxolaner" |medication_ingredients == "Afoxolaner, Milbemycin Oxime" |medication_ingredients == "Cyphenothrin, Fipronil" |medication_ingredients == "Cyphenothrin, Fipronil, (S)-Methoprene"|medication_ingredients == " Dinotefuran"|medication_ingredients == "Dinotefuran, Permethrin, Pyriproxyfen" |medication_ingredients =="Fipronil"|medication_ingredients =="Fipronil, (S)-Methoprene"|medication_ingredients =="Fipronil, Permethrin"|medication_ingredients =="Fipronil, Permethrin, Pyriproxyfen"|medication_ingredients =="Fipronil, Pyriproxyfen, (S)-Methoprene"|medication_ingredients =="Flumethrin, Imidacloprid"| medication_ingredients =="Fluralaner"|medication_ingredients ==" Imidacloprid"|medication_ingredients =="Indoxacarb, Permethrin"|medication_ingredients =="Imidacloprid, Permethrin, Pyriproxyfen"| medication_ingredients ==" Permethrin"|medication_ingredients =="Permethrin, Pyriproxyfen"|medication_ingredients =="Pyriproxyfen" ~ "Yes", 
+       medication_ingredients != "Afoxolaner" |medication_ingredients != "Afoxolaner, Milbemycin Oxime" |medication_ingredients != "Cyphenothrin, Fipronil" |medication_ingredients != "Cyphenothrin, Fipronil, (S)-Methoprene"|medication_ingredients != " Dinotefuran"|medication_ingredients != "Dinotefuran, Permethrin, Pyriproxyfen" |medication_ingredients !="Fipronil"|medication_ingredients !="Fipronil, (S)-Methoprene"|medication_ingredients !="Fipronil, Permethrin"|medication_ingredients !="Fipronil, Permethrin, Pyriproxyfen"|medication_ingredients !="Fipronil, Pyriproxyfen, (S)-Methoprene"|medication_ingredients !="Flumethrin, Imidacloprid"| medication_ingredients !="Fluralaner"|medication_ingredients !=" Imidacloprid"|medication_ingredients !="Indoxacarb, Permethrin"|medication_ingredients !="Imidacloprid, Permethrin, Pyriproxyfen"| medication_ingredients !=" Permethrin"|medication_ingredients !="Permethrin, Pyriproxyfen"|medication_ingredients !="Pyriproxyfen" ~ "No",
+    ))
+table(Prev2$prevention) %>% kbl() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+
+##Plot preventative vs. year in study 
+ggplot(Prev2, aes(x=year_in_study, fill= prevention)) + geom_bar() + ggtitle("Frequency of Prevention by Year in Study") + xlab("Year in Study") +ylab("Count") +  labs(fill = "On Prevention") 
+
+
+##distribution of year in study to see how often prevention is being used 
+ggplot(Prev, aes(x=year_in_study)) + geom_bar(color="slateblue",fill="slateblue") + ggtitle("Frequency of TBD Preventatives Admministered Annually") + xlab("Year in Study") +ylab("Count")
+
+
+##administration method
+table(Prev$administration_method) %>% as.data.frame() %>% rename(AdministrationMethod = Var1) %>% kbl() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+##Pull IV/IM record 
+Prev[Prev$subject_id == 'grlsUUTUSYGG'|Prev$subject_id == 'grlsVY18Q2MM', ]
+```
+
+After filtering for tick-prevention medication ingredients, I merged the prevention medications dataset with the TBD  dataset to compare dogs that were on prevention and the administration method, frequency, and TBD. Of all the dogs in the cohort that were on prevention, there were fewer TBD records than the overall total of TBD, indicating that tick prevention has had an impact on disease. Most prevention was administered orally and at monthly intervals, which is common for tick prevention and could indicate good owner-compliance. However, from the 2by2 table on TBD and administration method, there were fewer TBD records for topical administration than oral. Additionally, there were quite a few owners that indicated seasonal administration of tick prevention. However, as ticks have moved into new regions of the US and can be found year-round due to changes in climate, year-round administration is becoming more popular as a recommendation. 
+
+
+```{r, echo=FALSE}
+##merge Prev with TBD2 to compare among dogs on prevention administration (TBD and administration)
+admin <- right_join(Prev, TBD2, by = c("subject_id", "year_in_study"))
+head(admin, 20) %>% kbl() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+  ##administration method
+table(admin$administration_method, admin$TBD) %>% as.data.frame() %>% rename(AdministrationMethod = Var1) %>% kbl() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+  ##dogs on prevention that get TBD 
+table(admin$TBD) %>% as.data.frame() %>% rename(TickBorneDisease = Var1) %>% kbl() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+  ##prevention frequency 
+table(admin$frequency_specify)%>% as.data.frame() %>% rename(Frequency = Var1) %>%kbl() %>% kable_styling(bootstrap_options = c("striped", "hover","condensed"))
+  ##prevention frequency and administration method
+table(admin$administration_method, admin$frequency_specify)
+  ##2by2 table, adminisrtation method and TBD 
+cross_cases(admin, TBD, administration_method) %>% kbl() %>% kable_styling(bootstrap_options = c("striped", "hover","condensed"))
+
+                                      
+```
+
+## Conclusion and Next Steps 
+From the GRLS data, there were almost 400 records of Lyme Disease, Anaplasmosis, Ehrlichiosis, and RMSF. Most records were for **Lyme Disease** followed by **Anaplasmosis**. Lyme Disease was more often reported earlier in the study while Anaplasmosis and Ehrlichiosis were reported later in the study. In the cohort, 1,632 dogs reported being on prevention, with most dogs being administered an oral treatment and receiving treatment as they got older until year 5. There were fewer TBD records in dogs that were on prevention than dogs that were not on prevention. Of the dogs on prevention, there were more TBD records when using an oral administration method than topical administration. Since this cohort is comprised of dogs across the US, it would be interesting to see how TBD and prevention may differ between regions with differing tick populations. 
+
+
+
+## Source
+Morris Animal Foundation GRLS Data Commons 
+https://datacommons.morrisanimalfoundation.org/ 
+```{r}
+
+```
+ 
